@@ -7,7 +7,7 @@ import re
 import requests
 import base64
 from difflib import get_close_matches
-from telegram import Update, Message
+from telegram import Update, Message, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.constants import ParseMode
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, MessageHandler,
@@ -61,7 +61,6 @@ def rent_device(user, device_id, quantity):
     device_id = device_id.upper()
     if device_id not in devices:
         return f"❌ Không tìm thấy thiết bị `{device_id}`."
-    # Nếu số lượng chưa được cập nhật (None) thì không cho thuê
     if devices[device_id]["qty"] is None:
         return f"❌ Thiết bị `{device_id}` chưa được cập nhật số lượng."
     available = devices[device_id]["qty"] - devices[device_id].get("rented", 0)
@@ -122,7 +121,6 @@ async def update_devices_command(update: Update, context: ContextTypes.DEFAULT_T
     """
     message = update.message
     text = message.text.strip()
-    # Loại bỏ lệnh "/capnhatthietbi" (không phân biệt hoa thường)
     command_len = len("/capnhatthietbi")
     content = text[command_len:].strip()
     if not content:
@@ -135,7 +133,6 @@ async def update_devices_command(update: Update, context: ContextTypes.DEFAULT_T
         line = line.strip()
         if not line:
             continue
-        # Mỗi dòng có định dạng: Tên, số lượng (số lượng có thể bị bỏ trống)
         parts = [p.strip() for p in line.split(",")]
         if len(parts) == 1:
             name = parts[0]
@@ -153,14 +150,13 @@ async def update_devices_command(update: Update, context: ContextTypes.DEFAULT_T
             responses.append(f"❌ Dòng không hợp lệ: {line}")
             continue
 
-        # Kiểm tra xem thiết bị đã tồn tại theo tên (không phân biệt hoa thường)
         found_key = None
         for code, info in devices.items():
             if info.get("name", "").lower() == name.lower():
                 found_key = code
                 break
         if found_key:
-            devices[found_key]["qty"] = qty  # qty có thể là int hoặc None
+            devices[found_key]["qty"] = qty
             responses.append(f"🔄 Cập nhật thiết bị **{name}** với số lượng {qty if qty is not None else 'Chưa cập nhật'}.")
         else:
             # Sử dụng tên thiết bị làm key (chuyển về lowercase)
@@ -169,6 +165,19 @@ async def update_devices_command(update: Update, context: ContextTypes.DEFAULT_T
     save_json(DEVICE_FILE, devices)
     responses.append("Đã cập nhật thiết bị.")
     await message.reply_text("\n".join(responses), parse_mode=ParseMode.MARKDOWN)
+
+# =====================[ Lệnh /menu (CommandHandler) – Inline Keyboard Menu ]=====================
+async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Khi người dùng gõ /menu, bot sẽ trả về một menu với các nút lệnh.
+    Khi bấm nút, lệnh sẽ được tự động điền vào khung chat (không tự gửi).
+    """
+    keyboard = [
+        [InlineKeyboardButton("Cập nhật thiết bị", switch_inline_query_current_chat="/capnhatthietbi")],
+        # Bạn có thể thêm các nút khác tại đây nếu muốn.
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await update.message.reply_text("Chọn lệnh:", reply_markup=reply_markup)
 
 # =====================[ Xử lý tin nhắn ảnh + caption ]=====================
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -301,6 +310,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             conversation_histories[chat_id].insert(1, {"role": "system", "content": rentals_context})
             save_json(CONV_FILE, conversation_histories)
         try:
+            # Sử dụng model GPT-4o cho phản hồi văn bản
             response = openai.ChatCompletion.create(
                 model="gpt-4o",
                 messages=[{k: v for k, v in m.items() if k in ["role", "content"]} for m in conversation_histories[chat_id]],
@@ -318,8 +328,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def main():
     app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", lambda u, c: u.message.reply_text("Bot đã sẵn sàng.")))
-    # Sửa lại lệnh từ "/cập nhật thiết bị" thành "/capnhatthietbi"
     app.add_handler(CommandHandler("capnhatthietbi", update_devices_command, filters=filters.COMMAND))
+    app.add_handler(CommandHandler("menu", menu_command, filters=filters.COMMAND))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_text))
     await app.run_polling()
