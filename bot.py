@@ -2,10 +2,13 @@ import os
 import json
 import logging
 import openai
+import nest_asyncio
 from telegram import Update
 from telegram.constants import ParseMode
-from telegram.ext import (ApplicationBuilder, CommandHandler, MessageHandler,
-                          ContextTypes, filters)
+from telegram.ext import (
+    ApplicationBuilder, CommandHandler, MessageHandler,
+    ContextTypes, filters
+)
 from dotenv import load_dotenv
 
 # Load environment variables
@@ -146,12 +149,8 @@ async def main():
 
 if __name__ == '__main__':
     import asyncio
-
     try:
         asyncio.get_event_loop().run_until_complete(main())
     except RuntimeError:
-        # Đã có event loop đang chạy → dùng cách khác
-        import nest_asyncio
         nest_asyncio.apply()
         asyncio.run(main())
-
