@@ -146,4 +146,12 @@ async def main():
 
 if __name__ == '__main__':
     import asyncio
-    asyncio.run(main())
+
+    try:
+        asyncio.get_event_loop().run_until_complete(main())
+    except RuntimeError:
+        # Đã có event loop đang chạy → dùng cách khác
+        import nest_asyncio
+        nest_asyncio.apply()
+        asyncio.run(main())
+
