@@ -6,7 +6,7 @@ import nest_asyncio
 import re
 import requests
 import base64
-from telegram import Update
+from telegram import Update, Message
 from telegram.constants import ParseMode
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, MessageHandler,
@@ -20,116 +20,119 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 openai.api_key = OPENAI_API_KEY
 
-ALLOWED_USER_IDS = os.getenv("ALLOWED_USER_IDS", "")
-ALLOWED_USER_IDS = [int(uid) for uid in ALLOWED_USER_IDS.split(",") if uid.strip().isdigit()]
 DEFAULT_SYSTEM_PROMPT = os.getenv("DEFAULT_SYSTEM_PROMPT", "You are ChatGPT, a helpful assistant.")
 
 # =====================[ Cấu hình file & log ]=====================
 CONV_FILE = "conversations.json"
-RENTAL_FILE = "rental_log.json"
+DEVICE_FILE = "devices.json"
 logging.basicConfig(level=logging.INFO)
 
-# =====================[ Load/Lưu Hội Thoại ]=====================
-def load_conversations():
-    if not os.path.exists(CONV_FILE):
-        return {}
-    with open(CONV_FILE, "r", encoding="utf-8") as f:
-        return json.load(f)
+# =====================[ Load/Lưu Dữ liệu ]=====================
+def load_json(path):
+    return json.load(open(path, "r", encoding="utf-8")) if os.path.exists(path) else {}
 
-def save_conversations(data):
-    with open(CONV_FILE, "w", encoding="utf-8") as f:
+def save_json(path, data):
+    with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
 
-conversation_histories = load_conversations()
+conversation_histories = load_json(CONV_FILE)
+devices = load_json(DEVICE_FILE)
 
-# =====================[ Load/Lưu Thiết Bị Cho Thuê ]=====================
-def load_rentals():
-    if not os.path.exists(RENTAL_FILE):
-        return {}
-    with open(RENTAL_FILE, "r", encoding="utf-8") as f:
-        return json.load(f)
+# =====================[ Helper: lưu hội thoại ]=====================
+def append_conversation(chat_id, role, content, user=None):
+    if chat_id not in conversation_histories:
+        conversation_histories[chat_id] = [{"role": "system", "content": DEFAULT_SYSTEM_PROMPT}]
+    entry = {"role": role, "content": content}
+    if user:
+        entry["user"] = user
+    conversation_histories[chat_id].append(entry)
+    save_json(CONV_FILE, conversation_histories)
 
-def save_rentals(data):
-    with open(RENTAL_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
-
-rental_data = load_rentals()
-
-# =====================[ Command Functions ]=====================
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🤖 Chào bạn! Tôi là trợ lý GPT-4 trong nhóm.")
-
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "/start - Khởi động bot\n"
-        "/help - Hiển thị trợ giúp\n"
-        "/reset - Xoá lịch sử hội thoại\n"
-        "/mentionall - Gọi tất cả thành viên tương tác\n"
-        "/id - Lấy ID người dùng và nhóm\n"
-        "/users - Danh sách người dùng đã tương tác\n"
-        "/forgetme - Xoá dữ liệu của bạn khỏi bot\n"
-        "/rent [mã] [ghi chú] - Ghi thiết bị cho thuê\n"
-        "/check [mã] - Kiểm tra thiết bị\n"
-        "/list - Xem toàn bộ thiết bị đang cho thuê"
-    )
-
-# =====================[ Xử lý ảnh gửi lên khi có nhắc GPT ]=====================
+# =====================[ Xử lý tin nhắn ảnh + văn bản ]=====================
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    caption = update.message.caption or ""
+    message = update.message
+    caption = message.caption or ""
     trigger_words = ["gpt", "bot", "trợ lý", "chatgpt"]
-    lower_caption = caption.lower()
-    if not any(word in lower_caption for word in trigger_words):
+    if not any(word in caption.lower() for word in trigger_words):
         return
 
-    photo = update.message.photo[-1]
-    file = await context.bot.get_file(photo.file_id)
-    file_url = file.file_path
-
     try:
-        # Tải ảnh từ Telegram
-        response = requests.get(file_url)
-        image_data = response.content
-        encoded_image = base64.b64encode(image_data).decode("utf-8")
+        photo = message.photo[-1]
+        file = await context.bot.get_file(photo.file_id)
+        response = requests.get(file.file_path)
+        encoded_image = base64.b64encode(response.content).decode("utf-8")
 
-        # Gửi ảnh dưới dạng base64 tới GPT-4-Vision
         gpt_response = openai.ChatCompletion.create(
             model="gpt-4-vision-preview",
             messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": "Phân tích nội dung hình ảnh này."},
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": f"data:image/jpeg;base64,{encoded_image}"
-                            }
-                        }
-                    ]
-                }
+                {"role": "user", "content": [
+                    {"type": "text", "text": caption or "Phân tích nội dung hình ảnh."},
+                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{encoded_image}"}}
+                ]}
             ],
             max_tokens=500
         )
-        description = gpt_response.choices[0].message.content.strip()
-        await update.message.reply_text(f"📸 {description}")
+        reply = gpt_response.choices[0].message.content.strip()
+        await message.reply_text(f"📸 {reply}")
     except Exception as e:
-        logging.error(f"Lỗi GPT ảnh: {e}")
-        await update.message.reply_text("❌ Không thể phân tích ảnh này.")
+        logging.error(f"GPT Image Error: {e}")
+        await message.reply_text("❌ Không thể phân tích ảnh này.")
+
+# =====================[ Xử lý tin nhắn văn bản thông minh ]=====================
+async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    message = update.message
+    chat_id = str(message.chat_id)
+    text = message.text.strip()
+    user = update.effective_user.username or update.effective_user.first_name
+    lower = text.lower()
+
+    # === Nhận diện thêm thiết bị ===
+    add_match = re.search(r"(thêm|ghi|cập nhật).*thiết bị.*mã (\w+).*?là (.+)", lower)
+    if add_match:
+        device_id = add_match.group(2).upper()
+        description = add_match.group(3).strip()
+        devices[device_id] = description
+        save_json(DEVICE_FILE, devices)
+        await message.reply_text(f"✅ Đã lưu thiết bị `{device_id}`: {description}", parse_mode=ParseMode.MARKDOWN)
+        return
+
+    # === Xem mô tả thiết bị ===
+    if "thiết bị" in lower and "là gì" in lower:
+        found = [d for d in devices if d.lower() in lower]
+        if found:
+            reply = "\n".join([f"📦 `{d}`: {devices[d]}" for d in found])
+            await message.reply_text(reply, parse_mode=ParseMode.MARKDOWN)
+        else:
+            await message.reply_text("❓ Không tìm thấy thiết bị nào phù hợp trong dữ liệu.")
+        return
+
+    # === Ghi nhớ hội thoại GPT ===
+    append_conversation(chat_id, "user", text, user)
+    try:
+        response = openai.ChatCompletion.create(
+            model="gpt-3.5-turbo",
+            messages=[{k: v for k, v in m.items() if k in ["role", "content"]} for m in conversation_histories[chat_id]],
+            temperature=0.7,
+        )
+        reply = response.choices[0].message.content.strip()
+        append_conversation(chat_id, "assistant", reply)
+    except Exception as e:
+        logging.error(f"GPT Text Error: {e}")
+        reply = "❌ Đã xảy ra lỗi khi gọi GPT."
+
+    await message.reply_text(f"@{user} {reply}", parse_mode=ParseMode.MARKDOWN)
 
 # =====================[ MAIN BOT ]=====================
 async def main():
     app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
 
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("help", help_command))
+    app.add_handler(CommandHandler("start", lambda u, c: u.message.reply_text("Bot đã sẵn sàng.")))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
+    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_text))
 
     await app.run_polling()
 
 if __name__ == '__main__':
     import asyncio
     nest_asyncio.apply()
-
-    loop = asyncio.get_event_loop()
-    loop.create_task(main())
-    loop.run_forever()
+    asyncio.run(main())
