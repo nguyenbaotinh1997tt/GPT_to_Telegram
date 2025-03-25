@@ -54,7 +54,7 @@ def append_conversation(chat_id, role, content, user=None):
 # =====================[ Helper: kiểm tra nếu nên phản hồi GPT ]=====================
 def should_respond_to(text):
     trigger_words = ["gpt", "trợ lý", "chatgpt"]
-    return any(re.search(rf"\\b{re.escape(word)}\\b", text.lower()) for word in trigger_words)
+    return any(re.search(rf"\b{re.escape(word)}\b", text.lower()) for word in trigger_words)
 
 # =====================[ Xử lý tin nhắn ảnh + caption ]=====================
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
