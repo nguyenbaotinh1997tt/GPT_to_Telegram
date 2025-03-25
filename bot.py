@@ -6,6 +6,7 @@ import nest_asyncio
 import re
 import requests
 import base64
+from difflib import get_close_matches
 from telegram import Update, Message
 from telegram.constants import ParseMode
 from telegram.ext import (
@@ -25,6 +26,7 @@ DEFAULT_SYSTEM_PROMPT = os.getenv("DEFAULT_SYSTEM_PROMPT", "You are ChatGPT, a h
 # =====================[ Cấu hình file & log ]=====================
 CONV_FILE = "conversations.json"
 DEVICE_FILE = "devices.json"
+RENTAL_FILE = "rentals.json"
 logging.basicConfig(level=logging.INFO)
 
 # =====================[ Load/Lưu Dữ liệu ]=====================
@@ -37,6 +39,7 @@ def save_json(path, data):
 
 conversation_histories = load_json(CONV_FILE)
 devices = load_json(DEVICE_FILE)
+rentals = load_json(RENTAL_FILE)
 
 # =====================[ Helper: lưu hội thoại ]=====================
 def append_conversation(chat_id, role, content, user=None):
@@ -51,7 +54,7 @@ def append_conversation(chat_id, role, content, user=None):
 # =====================[ Helper: kiểm tra nếu nên phản hồi GPT ]=====================
 def should_respond_to(text):
     trigger_words = ["gpt", "trợ lý", "chatgpt"]
-    return any(word in text.lower() for word in trigger_words)
+    return any(re.search(rf"\\b{re.escape(word)}\\b", text.lower()) for word in trigger_words)
 
 # =====================[ Xử lý tin nhắn ảnh + caption ]=====================
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -96,7 +99,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         device_id = add_match.group(2).upper()
         description = add_match.group(3).strip()
         quantity = int(add_match.group(4))
-        devices[device_id] = {"desc": description, "qty": quantity}
+        devices[device_id] = {"desc": description, "qty": quantity, "rented": 0}
         save_json(DEVICE_FILE, devices)
         await message.reply_text(f"✅ Đã lưu thiết bị `{device_id}`: {description} (số lượng: {quantity})", parse_mode=ParseMode.MARKDOWN)
         return
@@ -108,16 +111,33 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply = "\n".join([f"📦 `{d}`: {devices[d]['desc']} (SL: {devices[d].get('qty', '?')})" for d in found])
             await message.reply_text(reply, parse_mode=ParseMode.MARKDOWN)
         else:
-            await message.reply_text("❓ Không tìm thấy thiết bị nào phù hợp trong dữ liệu.")
+            matches = get_close_matches(lower, devices.keys(), n=3, cutoff=0.6)
+            if matches:
+                await message.reply_text("❓ Không tìm thấy thiết bị chính xác. Có phải bạn muốn hỏi về:\n" + "\n".join(matches))
+            else:
+                await message.reply_text("❌ Không tìm thấy thiết bị nào phù hợp trong dữ liệu.")
         return
 
     # === Xem toàn bộ thiết bị ===
     if re.search(r"(danh sách|xem|liệt kê).*thiết bị", lower):
         if devices:
-            reply = "\n".join([f"📦 `{d}`: {info['desc']} (SL: {info.get('qty', '?')})" for d, info in devices.items()])
+            reply = "\n".join([f"📦 `{d}`: {info['desc']} (SL: {info.get('qty', '?')} - Đang thuê: {info.get('rented', 0)})" for d, info in devices.items()])
             await message.reply_text(reply, parse_mode=ParseMode.MARKDOWN)
         else:
             await message.reply_text("⚠️ Hiện chưa có thiết bị nào được lưu.")
+        return
+
+    # === Thống kê thiết bị đang rảnh ===
+    if re.search(r"(thiết bị )?(rảnh|còn trống|chưa thuê)", lower):
+        available = [
+            f"✅ `{d}`: {info['desc']} (Còn: {info.get('qty', 0) - info.get('rented', 0)})"
+            for d, info in devices.items()
+            if info.get("qty", 0) - info.get("rented", 0) > 0
+        ]
+        if available:
+            await message.reply_text("📊 Thiết bị còn rảnh:\n" + "\n".join(available), parse_mode=ParseMode.MARKDOWN)
+        else:
+            await message.reply_text("❗ Hiện tất cả thiết bị đã được thuê hết.")
         return
 
     # === Tìm theo người hoặc loại ===
@@ -129,7 +149,11 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if matched:
                 await message.reply_text("🔎 Kết quả tìm thấy:\n" + "\n".join(matched), parse_mode=ParseMode.MARKDOWN)
             else:
-                await message.reply_text("❌ Không tìm thấy thiết bị nào phù hợp.")
+                suggestions = get_close_matches(keyword.lower(), [info['desc'].lower() for info in devices.values()], n=3, cutoff=0.6)
+                if suggestions:
+                    await message.reply_text("❓ Không tìm thấy chính xác. Có phải bạn muốn tìm:\n" + "\n".join(suggestions))
+                else:
+                    await message.reply_text("❌ Không tìm thấy thiết bị nào phù hợp.")
         return
 
     # === Ghi nhớ hội thoại GPT (chỉ nếu chứa từ khóa) ===
