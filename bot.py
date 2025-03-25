@@ -7,7 +7,7 @@ import re
 import requests
 import base64
 from difflib import get_close_matches
-from telegram import Update, Message, InlineKeyboardMarkup, InlineKeyboardButton
+from telegram import Update, Message
 from telegram.constants import ParseMode
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, MessageHandler,
@@ -60,27 +60,28 @@ def should_respond_to(text):
 def rent_device(user, device_id, quantity):
     device_id = device_id.upper()
     if device_id not in devices:
-        return f"❌ Không tìm thấy thiết bị `{device_id}`."
+        return f"❌ Không tìm thấy thiết bị {device_id}."
+    # Nếu số lượng chưa được cập nhật (None) thì không cho thuê
     if devices[device_id]["qty"] is None:
-        return f"❌ Thiết bị `{device_id}` chưa được cập nhật số lượng."
+        return f"❌ Thiết bị {device_id} chưa được cập nhật số lượng."
     available = devices[device_id]["qty"] - devices[device_id].get("rented", 0)
     if quantity > available:
-        return f"❌ Thiết bị `{device_id}` chỉ còn {available} chưa thuê. Bạn không thể thuê {quantity}."
+        return f"❌ Thiết bị {device_id} chỉ còn {available} chưa thuê. Bạn không thể thuê {quantity}."
     devices[device_id]["rented"] = devices[device_id].get("rented", 0) + quantity
     if user not in rentals:
         rentals[user] = {}
     rentals[user][device_id] = rentals[user].get(device_id, 0) + quantity
     save_json(DEVICE_FILE, devices)
     save_json(RENTAL_FILE, rentals)
-    return f"✅ {user} đã thuê {quantity} thiết bị `{device_id}` thành công."
+    return f"✅ {user} đã thuê {quantity} thiết bị {device_id} thành công."
 
 def return_device(user, device_id, quantity):
     device_id = device_id.upper()
     if user not in rentals or device_id not in rentals[user]:
-        return f"❌ {user} không hề thuê thiết bị `{device_id}`."
+        return f"❌ {user} không hề thuê thiết bị {device_id}."
     rented_qty = rentals[user][device_id]
     if quantity > rented_qty:
-        return f"❌ {user} chỉ đang thuê {rented_qty} thiết bị `{device_id}`."
+        return f"❌ {user} chỉ đang thuê {rented_qty} thiết bị {device_id}."
     devices[device_id]["rented"] = devices[device_id].get("rented", 0) - quantity
     if devices[device_id]["rented"] < 0:
         devices[device_id]["rented"] = 0
@@ -93,7 +94,7 @@ def return_device(user, device_id, quantity):
         rentals[user][device_id] = new_qty
     save_json(DEVICE_FILE, devices)
     save_json(RENTAL_FILE, rentals)
-    return f"✅ {user} đã trả {quantity} thiết bị `{device_id}` thành công."
+    return f"✅ {user} đã trả {quantity} thiết bị {device_id} thành công."
 
 def generate_rentals_context():
     lines = ["[DỮ LIỆU THUÊ THIẾT BỊ HIỆN TẠI]"]
@@ -121,6 +122,7 @@ async def update_devices_command(update: Update, context: ContextTypes.DEFAULT_T
     """
     message = update.message
     text = message.text.strip()
+    # Loại bỏ lệnh "/capnhatthietbi" (không phân biệt hoa thường)
     command_len = len("/capnhatthietbi")
     content = text[command_len:].strip()
     if not content:
@@ -133,6 +135,7 @@ async def update_devices_command(update: Update, context: ContextTypes.DEFAULT_T
         line = line.strip()
         if not line:
             continue
+        # Mỗi dòng có định dạng: Tên, số lượng (số lượng có thể bị bỏ trống)
         parts = [p.strip() for p in line.split(",")]
         if len(parts) == 1:
             name = parts[0]
@@ -150,13 +153,14 @@ async def update_devices_command(update: Update, context: ContextTypes.DEFAULT_T
             responses.append(f"❌ Dòng không hợp lệ: {line}")
             continue
 
+        # Kiểm tra xem thiết bị đã tồn tại theo tên (không phân biệt hoa thường)
         found_key = None
         for code, info in devices.items():
             if info.get("name", "").lower() == name.lower():
                 found_key = code
                 break
         if found_key:
-            devices[found_key]["qty"] = qty
+            devices[found_key]["qty"] = qty  # qty có thể là int hoặc None
             responses.append(f"🔄 Cập nhật thiết bị **{name}** với số lượng {qty if qty is not None else 'Chưa cập nhật'}.")
         else:
             # Sử dụng tên thiết bị làm key (chuyển về lowercase)
@@ -165,19 +169,6 @@ async def update_devices_command(update: Update, context: ContextTypes.DEFAULT_T
     save_json(DEVICE_FILE, devices)
     responses.append("Đã cập nhật thiết bị.")
     await message.reply_text("\n".join(responses), parse_mode=ParseMode.MARKDOWN)
-
-# =====================[ Lệnh /menu (CommandHandler) – Inline Keyboard Menu ]=====================
-async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    Khi người dùng gõ /menu, bot sẽ trả về một menu với các nút lệnh.
-    Khi bấm nút, lệnh sẽ được tự động điền vào khung chat (không tự gửi).
-    """
-    keyboard = [
-        [InlineKeyboardButton("Cập nhật thiết bị", switch_inline_query_current_chat="/capnhatthietbi")],
-        # Bạn có thể thêm các nút khác tại đây nếu muốn.
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text("Chọn lệnh:", reply_markup=reply_markup)
 
 # =====================[ Xử lý tin nhắn ảnh + caption ]=====================
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -222,7 +213,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         found = [d for d in devices if d.lower() in lower or devices[d].get("name", "").lower() in lower]
         if found:
             reply = "\n".join([
-                f"📦 `{d}`: {devices[d].get('name', '')} (SL: {devices[d].get('qty') if devices[d].get('qty') is not None else 'Chưa cập nhật'})"
+                f"📦 {d}: {devices[d].get('name', '')} (SL: {devices[d].get('qty') if devices[d].get('qty') is not None else 'Chưa cập nhật'})"
                 for d in found
             ])
             await message.reply_text(reply, parse_mode=ParseMode.MARKDOWN)
@@ -238,7 +229,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if re.search(r"(danh sách|xem|liệt kê).*thiết bị", lower):
         if devices:
             reply = "\n".join([
-                f"📦 `{d}`: {info.get('name', '')} (SL: {info.get('qty') if info.get('qty') is not None else 'Chưa cập nhật'} - Đang thuê: {info.get('rented', 0)})"
+                f"📦 {d}: {info.get('name', '')} (SL: {info.get('qty') if info.get('qty') is not None else 'Chưa cập nhật'} - Đang thuê: {info.get('rented', 0)})"
                 for d, info in devices.items()
             ])
             await message.reply_text(reply, parse_mode=ParseMode.MARKDOWN)
@@ -249,7 +240,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Thống kê thiết bị còn rảnh
     if re.search(r"(thiết bị )?(rảnh|còn trống|chưa thuê)", lower):
         available = [
-            f"✅ `{d}`: {info.get('name', '')} (Còn: {info.get('qty') - info.get('rented', 0) if info.get('qty') is not None else 'Chưa cập nhật'})"
+            f"✅ {d}: {info.get('name', '')} (Còn: {info.get('qty') - info.get('rented', 0) if info.get('qty') is not None else 'Chưa cập nhật'})"
             for d, info in devices.items()
             if info.get("qty") is not None and info.get("qty") - info.get("rented", 0) > 0
         ]
@@ -282,7 +273,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if user not in rentals or not rentals[user]:
             await message.reply_text("❌ Bạn hiện không thuê thiết bị nào.")
         else:
-            lines = [f"🔹 `{dev}` x {qty}" for dev, qty in rentals[user].items()]
+            lines = [f"🔹 {dev} x {qty}" for dev, qty in rentals[user].items()]
             reply = "Bạn đang thuê:\n" + "\n".join(lines)
             await message.reply_text(reply, parse_mode=ParseMode.MARKDOWN)
         return
@@ -296,9 +287,9 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if device_id in devs:
                 renters.append(f"{usr} (x{devs[device_id]})")
         if renters:
-            reply = f"👥 Thiết bị `{device_id}` đang được thuê bởi:\n" + "\n".join(renters)
+            reply = f"👥 Thiết bị {device_id} đang được thuê bởi:\n" + "\n".join(renters)
         else:
-            reply = f"❌ Không tìm thấy ai đang thuê thiết bị `{device_id}`."
+            reply = f"❌ Không tìm thấy ai đang thuê thiết bị {device_id}."
         await message.reply_text(reply, parse_mode=ParseMode.MARKDOWN)
         return
 
@@ -310,7 +301,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             conversation_histories[chat_id].insert(1, {"role": "system", "content": rentals_context})
             save_json(CONV_FILE, conversation_histories)
         try:
-            # Sử dụng model GPT-4o cho phản hồi văn bản
             response = openai.ChatCompletion.create(
                 model="gpt-4o",
                 messages=[{k: v for k, v in m.items() if k in ["role", "content"]} for m in conversation_histories[chat_id]],
@@ -328,8 +318,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def main():
     app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", lambda u, c: u.message.reply_text("Bot đã sẵn sàng.")))
+    # Sửa lại lệnh từ "/cập nhật thiết bị" thành "/capnhatthietbi"
     app.add_handler(CommandHandler("capnhatthietbi", update_devices_command, filters=filters.COMMAND))
-    app.add_handler(CommandHandler("menu", menu_command, filters=filters.COMMAND))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_text))
     await app.run_polling()
