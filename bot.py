@@ -63,7 +63,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         encoded_image = base64.b64encode(response.content).decode("utf-8")
 
         gpt_response = openai.ChatCompletion.create(
-            model="gpt-4-vision-preview",
+            model="gpt-4o",
             messages=[
                 {"role": "user", "content": [
                     {"type": "text", "text": caption or "Phân tích nội dung hình ảnh."},
