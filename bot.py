@@ -5,6 +5,7 @@ import openai
 import nest_asyncio
 import re
 import requests
+import base64
 from telegram import Update
 from telegram.constants import ParseMode
 from telegram.ext import (
@@ -82,23 +83,34 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     photo = update.message.photo[-1]
     file = await context.bot.get_file(photo.file_id)
-    file_path = file.file_path
+    file_url = file.file_path
 
     try:
-        response = openai.ChatCompletion.create(
+        # Tải ảnh từ Telegram
+        response = requests.get(file_url)
+        image_data = response.content
+        encoded_image = base64.b64encode(image_data).decode("utf-8")
+
+        # Gửi ảnh dưới dạng base64 tới GPT-4-Vision
+        gpt_response = openai.ChatCompletion.create(
             model="gpt-4-vision-preview",
             messages=[
                 {
                     "role": "user",
                     "content": [
-                        {"type": "text", "text": "Mô tả nội dung hình ảnh này."},
-                        {"type": "image_url", "image_url": {"url": file_path}},
+                        {"type": "text", "text": "Phân tích nội dung hình ảnh này."},
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:image/jpeg;base64,{encoded_image}"
+                            }
+                        }
                     ]
                 }
             ],
             max_tokens=500
         )
-        description = response.choices[0].message.content.strip()
+        description = gpt_response.choices[0].message.content.strip()
         await update.message.reply_text(f"📸 {description}")
     except Exception as e:
         logging.error(f"Lỗi GPT ảnh: {e}")
