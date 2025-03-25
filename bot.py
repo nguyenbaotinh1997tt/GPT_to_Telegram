@@ -61,7 +61,7 @@ def rent_device(user, device_id, quantity):
     device_id = device_id.upper()
     if device_id not in devices:
         return f"❌ Không tìm thấy thiết bị `{device_id}`."
-    # Nếu số lượng chưa cập nhật, không cho thuê
+    # Nếu số lượng chưa được cập nhật (None) thì không cho thuê
     if devices[device_id]["qty"] is None:
         return f"❌ Thiết bị `{device_id}` chưa được cập nhật số lượng."
     available = devices[device_id]["qty"] - devices[device_id].get("rented", 0)
@@ -112,7 +112,7 @@ async def update_devices_command(update: Update, context: ContextTypes.DEFAULT_T
     """
     Lệnh: /cập nhật thiết bị
     Nội dung tin nhắn sau lệnh là danh sách thiết bị, mỗi dòng có định dạng: Tên, số lượng
-    Nếu không cung cấp số lượng thì số lượng sẽ được lưu là "Chưa cập nhật".
+    Nếu không cung cấp số lượng thì số lượng sẽ được lưu là "Chưa cập nhật" (None).
     Ví dụ:
       Thẻ touch 80GB, 3
       Thẻ XQD, 1
@@ -173,6 +173,7 @@ async def update_devices_command(update: Update, context: ContextTypes.DEFAULT_T
             devices[code] = {"name": name, "qty": qty, "rented": 0}
             responses.append(f"➕ Thêm thiết bị mới **{name}** với số lượng {qty if qty is not None else 'Chưa cập nhật'} (mã: `{code}`).")
     save_json(DEVICE_FILE, devices)
+    responses.append("Đã cập nhật thiết bị.")
     await message.reply_text("\n".join(responses), parse_mode=ParseMode.MARKDOWN)
 
 # =====================[ Xử lý tin nhắn ảnh + caption ]=====================
