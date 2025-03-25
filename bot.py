@@ -48,12 +48,16 @@ def append_conversation(chat_id, role, content, user=None):
     conversation_histories[chat_id].append(entry)
     save_json(CONV_FILE, conversation_histories)
 
-# =====================[ Xử lý tin nhắn ảnh + văn bản ]=====================
+# =====================[ Helper: kiểm tra nếu nên phản hồi GPT ]=====================
+def should_respond_to(text):
+    trigger_words = ["gpt", "trợ lý", "chatgpt"]
+    return any(word in text.lower() for word in trigger_words)
+
+# =====================[ Xử lý tin nhắn ảnh + caption ]=====================
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.message
     caption = message.caption or ""
-    trigger_words = ["gpt", "bot", "trợ lý", "chatgpt"]
-    if not any(word in caption.lower() for word in trigger_words):
+    if not should_respond_to(caption):
         return
 
     try:
@@ -86,27 +90,52 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user.username or update.effective_user.first_name
     lower = text.lower()
 
-    # === Nhận diện thêm thiết bị ===
-    add_match = re.search(r"(thêm|ghi|cập nhật).*thiết bị.*mã (\w+).*?là (.+)", lower)
+    # === Nhận diện thêm thiết bị với số lượng ===
+    add_match = re.search(r"(thêm|ghi|cập nhật).*thiết bị.*mã (\w+).*?là (.+?) với số lượng (\d+)", lower)
     if add_match:
         device_id = add_match.group(2).upper()
         description = add_match.group(3).strip()
-        devices[device_id] = description
+        quantity = int(add_match.group(4))
+        devices[device_id] = {"desc": description, "qty": quantity}
         save_json(DEVICE_FILE, devices)
-        await message.reply_text(f"✅ Đã lưu thiết bị `{device_id}`: {description}", parse_mode=ParseMode.MARKDOWN)
+        await message.reply_text(f"✅ Đã lưu thiết bị `{device_id}`: {description} (số lượng: {quantity})", parse_mode=ParseMode.MARKDOWN)
         return
 
     # === Xem mô tả thiết bị ===
     if "thiết bị" in lower and "là gì" in lower:
         found = [d for d in devices if d.lower() in lower]
         if found:
-            reply = "\n".join([f"📦 `{d}`: {devices[d]}" for d in found])
+            reply = "\n".join([f"📦 `{d}`: {devices[d]['desc']} (SL: {devices[d].get('qty', '?')})" for d in found])
             await message.reply_text(reply, parse_mode=ParseMode.MARKDOWN)
         else:
             await message.reply_text("❓ Không tìm thấy thiết bị nào phù hợp trong dữ liệu.")
         return
 
-    # === Ghi nhớ hội thoại GPT ===
+    # === Xem toàn bộ thiết bị ===
+    if re.search(r"(danh sách|xem|liệt kê).*thiết bị", lower):
+        if devices:
+            reply = "\n".join([f"📦 `{d}`: {info['desc']} (SL: {info.get('qty', '?')})" for d, info in devices.items()])
+            await message.reply_text(reply, parse_mode=ParseMode.MARKDOWN)
+        else:
+            await message.reply_text("⚠️ Hiện chưa có thiết bị nào được lưu.")
+        return
+
+    # === Tìm theo người hoặc loại ===
+    find_match = re.search(r"(ai|người nào).*thuê.*(\w+)|thiết bị.*(\w+).*được.*(ai|người) thuê", lower)
+    if find_match:
+        keyword = find_match.group(2) or find_match.group(3)
+        if keyword:
+            matched = [f"📦 `{d}`: {info['desc']} (SL: {info.get('qty', '?')})" for d, info in devices.items() if keyword.lower() in info['desc'].lower()]
+            if matched:
+                await message.reply_text("🔎 Kết quả tìm thấy:\n" + "\n".join(matched), parse_mode=ParseMode.MARKDOWN)
+            else:
+                await message.reply_text("❌ Không tìm thấy thiết bị nào phù hợp.")
+        return
+
+    # === Ghi nhớ hội thoại GPT (chỉ nếu chứa từ khóa) ===
+    if not should_respond_to(lower):
+        return
+
     append_conversation(chat_id, "user", text, user)
     try:
         response = openai.ChatCompletion.create(
