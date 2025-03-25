@@ -56,6 +56,81 @@ def should_respond_to(text):
     trigger_words = ["gpt", "trợ lý", "chatgpt"]
     return any(re.search(rf"\b{re.escape(word)}\b", text.lower()) for word in trigger_words)
 
+# =====================[ Các hàm quản lý thuê/trả thiết bị ]=====================
+def rent_device(user, device_id, quantity):
+    """
+    Cho user thuê thiết bị device_id với số lượng quantity.
+    Cập nhật rentals và devices. Trả về thông báo kết quả.
+    """
+    device_id = device_id.upper()
+    if device_id not in devices:
+        return f"❌ Không tìm thấy thiết bị `{device_id}`."
+
+    available = devices[device_id]["qty"] - devices[device_id]["rented"]
+    if quantity > available:
+        return f"❌ Thiết bị `{device_id}` chỉ còn {available} chưa thuê. Bạn không thể thuê {quantity}."
+
+    # Tăng 'rented' cho thiết bị
+    devices[device_id]["rented"] += quantity
+
+    # Ghi vào rentals
+    if user not in rentals:
+        rentals[user] = {}
+    rentals[user][device_id] = rentals[user].get(device_id, 0) + quantity
+
+    # Lưu file
+    save_json(DEVICE_FILE, devices)
+    save_json(RENTAL_FILE, rentals)
+
+    return f"✅ {user} đã thuê {quantity} thiết bị `{device_id}` thành công."
+
+def return_device(user, device_id, quantity):
+    """
+    Cho user trả lại thiết bị device_id với số lượng quantity.
+    Cập nhật rentals và devices. Trả về thông báo kết quả.
+    """
+    device_id = device_id.upper()
+    if user not in rentals or device_id not in rentals[user]:
+        return f"❌ {user} không hề thuê thiết bị `{device_id}`."
+
+    rented_qty = rentals[user][device_id]
+    if quantity > rented_qty:
+        return f"❌ {user} chỉ đang thuê {rented_qty} thiết bị `{device_id}`."
+
+    # Giảm 'rented' trên thiết bị
+    devices[device_id]["rented"] -= quantity
+    if devices[device_id]["rented"] < 0:
+        devices[device_id]["rented"] = 0
+
+    # Cập nhật rentals
+    new_qty = rented_qty - quantity
+    if new_qty == 0:
+        del rentals[user][device_id]
+        if not rentals[user]:
+            del rentals[user]
+    else:
+        rentals[user][device_id] = new_qty
+
+    # Lưu file
+    save_json(DEVICE_FILE, devices)
+    save_json(RENTAL_FILE, rentals)
+
+    return f"✅ {user} đã trả {quantity} thiết bị `{device_id}` thành công."
+
+def generate_rentals_context():
+    """
+    Tạo nội dung tóm tắt việc thuê để GPT có ngữ cảnh trả lời.
+    """
+    lines = ["[DỮ LIỆU THUÊ THIẾT BỊ HIỆN TẠI]"]
+    if not rentals:
+        lines.append("- Chưa có ai thuê thiết bị nào.")
+    else:
+        for user_name, devs in rentals.items():
+            if devs:
+                items = [f"{d} (x{q})" for d, q in devs.items()]
+                lines.append(f"- {user_name} đang thuê: {', '.join(items)}")
+    return "\n".join(lines)
+
 # =====================[ Xử lý tin nhắn ảnh + caption ]=====================
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.message
@@ -72,10 +147,13 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         gpt_response = openai.ChatCompletion.create(
             model="gpt-4o",
             messages=[
-                {"role": "user", "content": [
-                    {"type": "text", "text": caption or "Phân tích nội dung hình ảnh."},
-                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{encoded_image}"}}
-                ]}
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": caption or "Phân tích nội dung hình ảnh."},
+                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{encoded_image}"}}
+                    ]
+                }
             ],
             max_tokens=500
         )
@@ -90,7 +168,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.message
     chat_id = str(message.chat_id)
     text = message.text.strip()
-    user = update.effective_user.username or update.effective_user.first_name
+    user_name = update.effective_user.username or update.effective_user.first_name
     lower = text.lower()
 
     # === Nhận diện thêm thiết bị với số lượng ===
@@ -101,19 +179,27 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         quantity = int(add_match.group(4))
         devices[device_id] = {"desc": description, "qty": quantity, "rented": 0}
         save_json(DEVICE_FILE, devices)
-        await message.reply_text(f"✅ Đã lưu thiết bị `{device_id}`: {description} (số lượng: {quantity})", parse_mode=ParseMode.MARKDOWN)
+        await message.reply_text(
+            f"✅ Đã lưu thiết bị `{device_id}`: {description} (số lượng: {quantity})",
+            parse_mode=ParseMode.MARKDOWN
+        )
         return
 
     # === Xem mô tả thiết bị ===
     if "thiết bị" in lower and "là gì" in lower:
         found = [d for d in devices if d.lower() in lower]
         if found:
-            reply = "\n".join([f"📦 `{d}`: {devices[d]['desc']} (SL: {devices[d].get('qty', '?')})" for d in found])
+            reply = "\n".join([
+                f"📦 `{d}`: {devices[d]['desc']} (SL: {devices[d].get('qty', '?')})"
+                for d in found
+            ])
             await message.reply_text(reply, parse_mode=ParseMode.MARKDOWN)
         else:
             matches = get_close_matches(lower, devices.keys(), n=3, cutoff=0.6)
             if matches:
-                await message.reply_text("❓ Không tìm thấy thiết bị chính xác. Có phải bạn muốn hỏi về:\n" + "\n".join(matches))
+                await message.reply_text(
+                    "❓ Không tìm thấy thiết bị chính xác. Có phải bạn muốn hỏi về:\n" + "\n".join(matches)
+                )
             else:
                 await message.reply_text("❌ Không tìm thấy thiết bị nào phù hợp trong dữ liệu.")
         return
@@ -121,7 +207,10 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # === Xem toàn bộ thiết bị ===
     if re.search(r"(danh sách|xem|liệt kê).*thiết bị", lower):
         if devices:
-            reply = "\n".join([f"📦 `{d}`: {info['desc']} (SL: {info.get('qty', '?')} - Đang thuê: {info.get('rented', 0)})" for d, info in devices.items()])
+            reply = "\n".join([
+                f"📦 `{d}`: {info['desc']} (SL: {info.get('qty', '?')} - Đang thuê: {info.get('rented', 0)})"
+                for d, info in devices.items()
+            ])
             await message.reply_text(reply, parse_mode=ParseMode.MARKDOWN)
         else:
             await message.reply_text("⚠️ Hiện chưa có thiết bị nào được lưu.")
@@ -135,57 +224,12 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if info.get("qty", 0) - info.get("rented", 0) > 0
         ]
         if available:
-            await message.reply_text("📊 Thiết bị còn rảnh:\n" + "\n".join(available), parse_mode=ParseMode.MARKDOWN)
+            await message.reply_text(
+                "📊 Thiết bị còn rảnh:\n" + "\n".join(available),
+                parse_mode=ParseMode.MARKDOWN
+            )
         else:
             await message.reply_text("❗ Hiện tất cả thiết bị đã được thuê hết.")
         return
 
-    # === Tìm theo người hoặc loại ===
-    find_match = re.search(r"(ai|người nào).*thuê.*(\w+)|thiết bị.*(\w+).*được.*(ai|người) thuê", lower)
-    if find_match:
-        keyword = find_match.group(2) or find_match.group(3)
-        if keyword:
-            matched = [f"📦 `{d}`: {info['desc']} (SL: {info.get('qty', '?')})" for d, info in devices.items() if keyword.lower() in info['desc'].lower()]
-            if matched:
-                await message.reply_text("🔎 Kết quả tìm thấy:\n" + "\n".join(matched), parse_mode=ParseMode.MARKDOWN)
-            else:
-                suggestions = get_close_matches(keyword.lower(), [info['desc'].lower() for info in devices.values()], n=3, cutoff=0.6)
-                if suggestions:
-                    await message.reply_text("❓ Không tìm thấy chính xác. Có phải bạn muốn tìm:\n" + "\n".join(suggestions))
-                else:
-                    await message.reply_text("❌ Không tìm thấy thiết bị nào phù hợp.")
-        return
-
-    # === Ghi nhớ hội thoại GPT (chỉ nếu chứa từ khóa) ===
-    if not should_respond_to(lower):
-        return
-
-    append_conversation(chat_id, "user", text, user)
-    try:
-        response = openai.ChatCompletion.create(
-            model="gpt-3.5-turbo",
-            messages=[{k: v for k, v in m.items() if k in ["role", "content"]} for m in conversation_histories[chat_id]],
-            temperature=0.7,
-        )
-        reply = response.choices[0].message.content.strip()
-        append_conversation(chat_id, "assistant", reply)
-    except Exception as e:
-        logging.error(f"GPT Text Error: {e}")
-        reply = "❌ Đã xảy ra lỗi khi gọi GPT."
-
-    await message.reply_text(f"@{user} {reply}", parse_mode=ParseMode.MARKDOWN)
-
-# =====================[ MAIN BOT ]=====================
-async def main():
-    app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
-
-    app.add_handler(CommandHandler("start", lambda u, c: u.message.reply_text("Bot đã sẵn sàng.")))
-    app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
-    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_text))
-
-    await app.run_polling()
-
-if __name__ == '__main__':
-    import asyncio
-    nest_asyncio.apply()
-    asyncio.run(main())
+    # === Tìm theo người hoặc loại (cũ) ===
