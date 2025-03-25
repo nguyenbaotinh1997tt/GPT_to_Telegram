@@ -156,5 +156,18 @@ if __name__ == '__main__':
     loop = asyncio.get_event_loop()
     loop.create_task(main())
     loop.run_forever()
+RENTAL_FILE = "rental_log.json"
+
+def load_rentals():
+    if not os.path.exists(RENTAL_FILE):
+        return {}
+    with open(RENTAL_FILE, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+def save_rentals(data):
+    with open(RENTAL_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+
+rental_data = load_rentals()
 
 
