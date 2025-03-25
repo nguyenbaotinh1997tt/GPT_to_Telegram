@@ -177,6 +177,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lower_text = text.lower()
     username = user.username or user.first_name
 
+    # Nếu không nhắc đến "gpt" hoặc "bot", thì không trả lời (nhưng vẫn lưu nếu là quản lý thiết bị)
+    trigger_words = ["gpt", "bot", "trợ lý", "chatgpt"]
+    gpt_called = any(word in lower_text for word in trigger_words)
+
+    # --- Xử lý quản lý thiết bị (luôn hoạt động) ---
     match = re.search(r"cho thuê (\w+)[^\n]* cho (\w+)", lower_text)
     if match:
         device_id = match.group(1)
@@ -236,6 +241,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await message.reply_text(f"✅ Đã xoá thiết bị `{device_id}` khỏi danh sách cho thuê.", parse_mode=ParseMode.MARKDOWN)
         else:
             await message.reply_text(f"⚠️ Không tìm thấy thiết bị `{device_id}` đang được thuê.", parse_mode=ParseMode.MARKDOWN)
+        return
+
+    # --- Chỉ phản hồi GPT nếu có gọi tên ---
+    if not gpt_called:
         return
 
     if chat_id not in conversation_histories:
