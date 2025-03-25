@@ -144,6 +144,9 @@ async def main():
     app.add_handler(CommandHandler("users", list_users))
     app.add_handler(CommandHandler("forgetme", forget_me))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
+    app.add_handler(CommandHandler("rent", rent_device))
+    app.add_handler(CommandHandler("check", check_device))
+
 
     await app.run_polling()
 
@@ -169,5 +172,41 @@ def save_rentals(data):
         json.dump(data, f, indent=2, ensure_ascii=False)
 
 rental_data = load_rentals()
+async def rent_device(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    args = context.args
+    if len(args) < 2:
+        await update.message.reply_text("❗ Cú pháp: /rent [mã thiết bị] [ghi chú]")
+        return
+
+    device_id = args[0]
+    note = " ".join(args[1:])
+    username = update.effective_user.username or update.effective_user.first_name
+    date = update.message.date.strftime("%Y-%m-%d")
+
+    rental_data[device_id] = {
+        "renter": username,
+        "date_rented": date,
+        "note": note
+    }
+    save_rentals(rental_data)
+    await update.message.reply_text(f"✅ Đã ghi nhận thiết bị `{device_id}` được cho thuê.", parse_mode=ParseMode.MARKDOWN)
+async def check_device(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    args = context.args
+    if not args:
+        await update.message.reply_text("❗ Cú pháp: /check [mã thiết bị]")
+        return
+
+    device_id = args[0]
+    if device_id in rental_data:
+        info = rental_data[device_id]
+        await update.message.reply_text(
+            f"📦 Thiết bị `{device_id}`:\n"
+            f"👤 Người thuê: {info['renter']}\n"
+            f"📅 Ngày thuê: {info['date_rented']}\n"
+            f"📝 Ghi chú: {info['note']}",
+            parse_mode=ParseMode.MARKDOWN
+        )
+    else:
+        await update.message.reply_text(f"❌ Không tìm thấy thiết bị `{device_id}`.", parse_mode=ParseMode.MARKDOWN)
 
 
