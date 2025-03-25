@@ -163,16 +163,9 @@ async def update_devices_command(update: Update, context: ContextTypes.DEFAULT_T
             devices[found_key]["qty"] = qty  # qty có thể là int hoặc None
             responses.append(f"🔄 Cập nhật thiết bị **{name}** với số lượng {qty if qty is not None else 'Chưa cập nhật'}.")
         else:
-            # Tạo mã thiết bị tự động từ các ký tự đầu của từ trong tên
-            code = "".join(word[0] for word in name.split()).upper()
-            orig_code = code
-            i = 1
-            while code in devices:
-                code = f"{orig_code}{i}"
-                i += 1
-            devices[code] = {"name": name, "qty": qty, "rented": 0}
-            responses.append(f"➕ Thêm thiết bị mới **{name}** với số lượng {qty if qty is not None else 'Chưa cập nhật'} (mã: `{code}`).")
-
+            # Sử dụng tên thiết bị làm key (chuyển về lowercase)
+            devices[name.lower()] = {"name": name, "qty": qty, "rented": 0}
+            responses.append(f"➕ Thêm thiết bị mới **{name}** với số lượng {qty if qty is not None else 'Chưa cập nhật'}.")
     save_json(DEVICE_FILE, devices)
     responses.append("Đã cập nhật thiết bị.")
     await message.reply_text("\n".join(responses), parse_mode=ParseMode.MARKDOWN)
@@ -309,7 +302,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             save_json(CONV_FILE, conversation_histories)
         try:
             response = openai.ChatCompletion.create(
-                model="gpt-3.5-turbo",
+                model="gpt-4o",
                 messages=[{k: v for k, v in m.items() if k in ["role", "content"]} for m in conversation_histories[chat_id]],
                 temperature=0.7,
             )
