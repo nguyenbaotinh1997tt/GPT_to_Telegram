@@ -7,13 +7,14 @@ import re
 import requests
 import base64
 from difflib import get_close_matches
-from telegram import Update, Message
+from telegram import Update, Message, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.constants import ParseMode
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, MessageHandler,
     ContextTypes, filters
 )
 from dotenv import load_dotenv
+from datetime import datetime
 
 # =====================[ Load biến môi trường ]=====================
 load_dotenv()
@@ -27,6 +28,7 @@ DEFAULT_SYSTEM_PROMPT = os.getenv("DEFAULT_SYSTEM_PROMPT", "You are ChatGPT, a h
 CONV_FILE = "conversations.json"
 DEVICE_FILE = "devices.json"
 RENTAL_FILE = "rentals.json"
+RENTAL_LOG_FILE = "rental_log.json"  # File lưu thông tin lệnh /thue
 logging.basicConfig(level=logging.INFO)
 
 # =====================[ Load/Lưu Dữ liệu ]=====================
@@ -34,6 +36,13 @@ def load_json(path):
     return json.load(open(path, "r", encoding="utf-8")) if os.path.exists(path) else {}
 
 def save_json(path, data):
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+
+def load_log(path):
+    return json.load(open(path, "r", encoding="utf-8")) if os.path.exists(path) else []
+
+def save_log(path, data):
     with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
 
@@ -61,7 +70,6 @@ def rent_device(user, device_id, quantity):
     device_id = device_id.upper()
     if device_id not in devices:
         return f"❌ Không tìm thấy thiết bị {device_id}."
-    # Nếu số lượng chưa được cập nhật (None) thì không cho thuê
     if devices[device_id]["qty"] is None:
         return f"❌ Thiết bị {device_id} chưa được cập nhật số lượng."
     available = devices[device_id]["qty"] - devices[device_id].get("rented", 0)
@@ -122,7 +130,6 @@ async def update_devices_command(update: Update, context: ContextTypes.DEFAULT_T
     """
     message = update.message
     text = message.text.strip()
-    # Loại bỏ lệnh "/capnhatthietbi" (không phân biệt hoa thường)
     command_len = len("/capnhatthietbi")
     content = text[command_len:].strip()
     if not content:
@@ -135,7 +142,6 @@ async def update_devices_command(update: Update, context: ContextTypes.DEFAULT_T
         line = line.strip()
         if not line:
             continue
-        # Mỗi dòng có định dạng: Tên, số lượng (số lượng có thể bị bỏ trống)
         parts = [p.strip() for p in line.split(",")]
         if len(parts) == 1:
             name = parts[0]
@@ -153,14 +159,13 @@ async def update_devices_command(update: Update, context: ContextTypes.DEFAULT_T
             responses.append(f"❌ Dòng không hợp lệ: {line}")
             continue
 
-        # Kiểm tra xem thiết bị đã tồn tại theo tên (không phân biệt hoa thường)
         found_key = None
         for code, info in devices.items():
             if info.get("name", "").lower() == name.lower():
                 found_key = code
                 break
         if found_key:
-            devices[found_key]["qty"] = qty  # qty có thể là int hoặc None
+            devices[found_key]["qty"] = qty
             responses.append(f"🔄 Cập nhật thiết bị **{name}** với số lượng {qty if qty is not None else 'Chưa cập nhật'}.")
         else:
             # Sử dụng tên thiết bị làm key (chuyển về lowercase)
@@ -169,6 +174,49 @@ async def update_devices_command(update: Update, context: ContextTypes.DEFAULT_T
     save_json(DEVICE_FILE, devices)
     responses.append("Đã cập nhật thiết bị.")
     await message.reply_text("\n".join(responses), parse_mode=ParseMode.MARKDOWN)
+
+# =====================[ Lệnh /thue (CommandHandler) – Lưu thông tin thuê ]=====================
+async def thue_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Lệnh: /thue
+    Nội dung tin nhắn sau lệnh sẽ chứa thông tin người thuê và thiết bị được thuê.
+    Thông tin này sẽ được lưu vào file 'rental_log.json' cùng với thời gian gửi.
+    Ví dụ:
+      /thue Tôi thuê 2 thiết bị ABC và 1 thiết bị XYZ.
+    """
+    message = update.message
+    text = message.text.strip()
+    command_len = len("/thue")
+    content = text[command_len:].strip()
+    if not content:
+        await message.reply_text("Vui lòng cung cấp thông tin thuê sau lệnh /thue.")
+        return
+
+    timestamp = datetime.now().isoformat()
+    entry = {
+        "user": update.effective_user.username or update.effective_user.first_name,
+        "timestamp": timestamp,
+        "content": content
+    }
+    rental_log = load_log(RENTAL_LOG_FILE)
+    if not isinstance(rental_log, list):
+        rental_log = []
+    rental_log.append(entry)
+    save_log(RENTAL_LOG_FILE, rental_log)
+    await message.reply_text("Thông tin thuê đã được lưu.", parse_mode=ParseMode.MARKDOWN)
+
+# =====================[ Lệnh /menu (CommandHandler) – Inline Keyboard Menu ]=====================
+async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Khi người dùng gõ /menu, bot sẽ gửi một menu với nút lệnh.
+    Khi bấm nút, lệnh sẽ được tự động điền vào khung chat (không tự gửi).
+    """
+    keyboard = [
+        [InlineKeyboardButton("Cập nhật thiết bị", switch_inline_query_current_chat="/capnhatthietbi")],
+        [InlineKeyboardButton("Thuê (nhập thông tin)", switch_inline_query_current_chat="/thue")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await update.message.reply_text("Chọn lệnh:", reply_markup=reply_markup)
 
 # =====================[ Xử lý tin nhắn ảnh + caption ]=====================
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -318,8 +366,9 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def main():
     app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", lambda u, c: u.message.reply_text("Bot đã sẵn sàng.")))
-    # Sửa lại lệnh từ "/cập nhật thiết bị" thành "/capnhatthietbi"
     app.add_handler(CommandHandler("capnhatthietbi", update_devices_command, filters=filters.COMMAND))
+    app.add_handler(CommandHandler("thue", thue_command, filters=filters.COMMAND))
+    app.add_handler(CommandHandler("menu", menu_command, filters=filters.COMMAND))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_text))
     await app.run_polling()
