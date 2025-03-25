@@ -107,10 +107,10 @@ def generate_rentals_context():
                 lines.append(f"- {user_name} đang thuê: {', '.join(items)}")
     return "\n".join(lines)
 
-# =====================[ Lệnh cập nhật thiết bị (CommandHandler) ]=====================
+# =====================[ Lệnh /capnhatthietbi (CommandHandler) ]=====================
 async def update_devices_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    Lệnh: /cập nhật thiết bị
+    Lệnh: /capnhatthietbi
     Nội dung tin nhắn sau lệnh là danh sách thiết bị, mỗi dòng có định dạng: Tên, số lượng
     Nếu không cung cấp số lượng thì số lượng sẽ được lưu là "Chưa cập nhật" (None).
     Ví dụ:
@@ -122,11 +122,11 @@ async def update_devices_command(update: Update, context: ContextTypes.DEFAULT_T
     """
     message = update.message
     text = message.text.strip()
-    # Loại bỏ lệnh "/cập nhật thiết bị" (không phân biệt hoa thường)
-    command_len = len("/cập nhật thiết bị")
+    # Loại bỏ lệnh "/capnhatthietbi" (không phân biệt hoa thường)
+    command_len = len("/capnhatthietbi")
     content = text[command_len:].strip()
     if not content:
-        await message.reply_text("Vui lòng cung cấp danh sách thiết bị sau lệnh '/cập nhật thiết bị'.")
+        await message.reply_text("Vui lòng cung cấp danh sách thiết bị sau lệnh '/capnhatthietbi'.")
         return
 
     responses = []
@@ -172,6 +172,7 @@ async def update_devices_command(update: Update, context: ContextTypes.DEFAULT_T
                 i += 1
             devices[code] = {"name": name, "qty": qty, "rented": 0}
             responses.append(f"➕ Thêm thiết bị mới **{name}** với số lượng {qty if qty is not None else 'Chưa cập nhật'} (mã: `{code}`).")
+
     save_json(DEVICE_FILE, devices)
     responses.append("Đã cập nhật thiết bị.")
     await message.reply_text("\n".join(responses), parse_mode=ParseMode.MARKDOWN)
@@ -324,7 +325,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def main():
     app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", lambda u, c: u.message.reply_text("Bot đã sẵn sàng.")))
-    app.add_handler(CommandHandler("cập nhật thiết bị", update_devices_command, filters=filters.COMMAND))
+    # Sửa lại lệnh từ "/cập nhật thiết bị" thành "/capnhatthietbi"
+    app.add_handler(CommandHandler("capnhatthietbi", update_devices_command, filters=filters.COMMAND))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_text))
     await app.run_polling()
