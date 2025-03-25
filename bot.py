@@ -3,6 +3,7 @@ import json
 import logging
 import openai
 import nest_asyncio
+import re
 from telegram import Update
 from telegram.constants import ParseMode
 from telegram.ext import (
@@ -117,7 +118,7 @@ async def forget_me(update: Update, context: ContextTypes.DEFAULT_TYPE):
     save_conversations(conversation_histories)
     await update.message.reply_text(f"🧹 Đã xoá dữ liệu của @{username}.")
 
-# =====================[ Ghi thiết bị cho thuê ]=====================
+# =====================[ Ghi thiết bị cho thuê theo lệnh ]=====================
 async def rent_device(update: Update, context: ContextTypes.DEFAULT_TYPE):
     args = context.args
     if len(args) < 2:
@@ -137,7 +138,7 @@ async def rent_device(update: Update, context: ContextTypes.DEFAULT_TYPE):
     save_rentals(rental_data)
     await update.message.reply_text(f"✅ Đã ghi nhận thiết bị `{device_id}` được cho thuê.", parse_mode=ParseMode.MARKDOWN)
 
-# =====================[ Kiểm tra thiết bị đã cho thuê ]=====================
+# =====================[ Kiểm tra thiết bị theo lệnh ]=====================
 async def check_device(update: Update, context: ContextTypes.DEFAULT_TYPE):
     args = context.args
     if not args:
@@ -157,19 +158,36 @@ async def check_device(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text(f"❌ Không tìm thấy thiết bị `{device_id}`.", parse_mode=ParseMode.MARKDOWN)
 
-# =====================[ Xử lý tin nhắn thường ]=====================
+# =====================[ Xử lý tin nhắn tự nhiên ]=====================
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.message
     chat_id = str(update.effective_chat.id)
     user = update.effective_user
-    text = message.text
-
-    if update.effective_chat.type in ["group", "supergroup"]:
-        if not (f"@{context.bot.username}" in text or message.reply_to_message):
-            return
-
+    text = message.text.strip()
+    lower_text = text.lower()
     username = user.username or user.first_name
 
+    # ✅ Tự động nhận diện "cho thuê [mã] cho [tên]"
+    match = re.search(r"cho thuê (\w+)[^\n]* cho (\w+)", lower_text)
+    if match:
+        device_id = match.group(1)
+        renter = match.group(2)
+        date = update.message.date.strftime("%Y-%m-%d")
+        note = text
+
+        rental_data[device_id] = {
+            "renter": renter,
+            "date_rented": date,
+            "note": note
+        }
+        save_rentals(rental_data)
+        await message.reply_text(
+            f"✅ Đã tự động ghi nhận thiết bị `{device_id}` được cho thuê cho {renter}.",
+            parse_mode=ParseMode.MARKDOWN
+        )
+        return
+
+    # ✅ ChatGPT ghi nhớ hội thoại
     if chat_id not in conversation_histories:
         conversation_histories[chat_id] = []
         conversation_histories[chat_id].append({"role": "system", "content": DEFAULT_SYSTEM_PROMPT})
@@ -178,7 +196,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         response = openai.ChatCompletion.create(
-            model="gpt-3.5-turbo",  # ⚠️ nếu bạn chưa có GPT-4, nên dùng gpt-3.5
+            model="gpt-3.5-turbo",
             messages=[{k: v for k, v in msg.items() if k in ["role", "content"]} for msg in conversation_histories[chat_id]],
             temperature=0.7,
         )
