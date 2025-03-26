@@ -9,23 +9,30 @@ import base64
 from difflib import get_close_matches
 from telegram import Update, Message
 from telegram.constants import ParseMode
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
+from telegram.ext import (
+    ApplicationBuilder, CommandHandler, MessageHandler,
+    ContextTypes, filters
+)
 from dotenv import load_dotenv
 from datetime import datetime
+
+# -------------------- IMPORT Google Sheets API --------------------
+from google.oauth2 import service_account
+from googleapiclient.discovery import build
 
 # =====================[ Load biến môi trường ]=====================
 load_dotenv()
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 openai.api_key = OPENAI_API_KEY
+
 DEFAULT_SYSTEM_PROMPT = os.getenv("DEFAULT_SYSTEM_PROMPT", "You are ChatGPT, a helpful assistant.")
 
 # =====================[ Cấu hình file & log ]=====================
 CONV_FILE = "conversations.json"
-DEVICE_FILE = "devices.json"
 logging.basicConfig(level=logging.INFO)
 
-# =====================[ Load/Lưu Dữ liệu ]=====================
+# =====================[ Load/Lưu Dữ liệu hội thoại ]=====================
 def load_json(path):
     return json.load(open(path, "r", encoding="utf-8")) if os.path.exists(path) else {}
 
@@ -33,11 +40,31 @@ def save_json(path, data):
     with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
 
-# Lưu lịch sử hội thoại và dữ liệu thiết bị
 conversation_histories = load_json(CONV_FILE)
-devices = load_json(DEVICE_FILE)
 
-# =====================[ Helper: Lưu hội thoại ]=====================
+# -------------------- [Google Sheets Helper] --------------------
+def get_sheet_values(credentials_file="credentials.json"):
+    """
+    Hàm này truy xuất dữ liệu từ Google Sheet bằng Google Sheets API.
+    Bạn có thể thay đổi spreadsheet_id, range_name tùy nhu cầu.
+    """
+    spreadsheet_id = "1etFuXi-aowcqAEwPHbvluWHnWM7PQ8YD54KPmkwQ6jI"  # <-- ID sheet bạn cung cấp
+    range_name = "'Tháng 03'!A3:S900"  # <-- Phạm vi bạn cung cấp
+    SCOPES = ['https://www.googleapis.com/auth/spreadsheets.readonly']
+
+    # Tạo credentials từ file JSON
+    creds = service_account.Credentials.from_service_account_file(credentials_file, scopes=SCOPES)
+
+    # Tạo service Google Sheets
+    service = build('sheets', 'v4', credentials=creds)
+    sheet = service.spreadsheets()
+
+    # Gọi API để lấy dữ liệu
+    result = sheet.values().get(spreadsheetId=spreadsheet_id, range=range_name).execute()
+    values = result.get('values', [])
+    return values
+
+# =====================[ Helper: Lưu hội thoại GPT ]=====================
 def append_conversation(chat_id, role, content, user=None):
     if chat_id not in conversation_histories:
         conversation_histories[chat_id] = [{"role": "system", "content": DEFAULT_SYSTEM_PROMPT}]
@@ -52,61 +79,31 @@ def should_respond_to(text):
     trigger_words = ["gpt", "trợ lý", "chatgpt"]
     return any(re.search(rf"\b{re.escape(word)}\b", text.lower()) for word in trigger_words)
 
-# =====================[ Lệnh cập nhật dữ liệu thiết bị /capnhat ]=====================
-async def update_devices_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# =====================[ Lệnh /getdata – Lấy dữ liệu từ Google Sheet ]=====================
+async def getdata_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    Lệnh: /capnhat
-    Nội dung tin nhắn sau lệnh là danh sách thiết bị, mỗi dòng có định dạng: Tên thiết bị, tổng số lượng
-    Ví dụ:
-      sony a73, 4
-      Đèn nanlite, 1
-    Nếu không cung cấp số lượng thì số lượng sẽ được lưu là "Chưa cập nhật" (None).
+    Khi người dùng gõ /getdata, bot sẽ lấy dữ liệu từ Google Sheet và gửi lại.
     """
-    message = update.message
-    text = message.text.strip()
-    command_len = len("/capnhat")
-    content = text[command_len:].strip()
-    if not content:
-        await message.reply_text("⚠️ Vui lòng gửi danh sách thiết bị sau lệnh /capnhat.")
-        return
-
-    responses = []
-    lines = content.splitlines()
-    for line in lines:
-        line = line.strip()
-        if not line:
-            continue
-        # Mỗi dòng theo định dạng: Tên thiết bị, tổng số lượng
-        parts = [p.strip() for p in line.split(",")]
-        if len(parts) == 1:
-            name = parts[0]
-            qty = None
-        elif len(parts) == 2:
-            name = parts[0]
-            qty = parts[1] if parts[1] != "" else None
-            if qty is not None:
-                try:
-                    qty = int(qty)
-                except ValueError:
-                    responses.append(f"❌ Số lượng không hợp lệ ở dòng: {line}")
-                    continue
+    try:
+        data = get_sheet_values("credentials.json")
+        if not data:
+            response = "Không tìm thấy dữ liệu trong Google Sheet."
         else:
-            responses.append(f"❌ Dòng không hợp lệ: {line}")
-            continue
+            # Tùy ý bạn xử lý/định dạng dữ liệu. Ở đây chỉ ghép mỗi hàng thành 1 dòng.
+            lines = []
+            for row in data:
+                lines.append(" | ".join(row))
+            response = "\n".join(lines)
+    except Exception as e:
+        logging.error(f"Lỗi khi lấy dữ liệu từ Google Sheet: {e}")
+        response = "❌ Đã xảy ra lỗi khi lấy dữ liệu từ Google Sheet."
 
-        # Sử dụng tên thiết bị (lowercase) làm key
-        devices[name.lower()] = {"name": name, "qty": qty, "rented": devices.get(name.lower(), {}).get("rented", 0)}
-        responses.append(f"✅ Đã cập nhật thiết bị **{name}** với số lượng {qty if qty is not None else 'Chưa cập nhật'}.")
-
-    save_json(DEVICE_FILE, devices)
-    responses.append("Đã cập nhật thiết bị.")
-    await message.reply_text("\n".join(responses), parse_mode=ParseMode.MARKDOWN)
+    await update.message.reply_text(response, parse_mode=ParseMode.MARKDOWN)
 
 # =====================[ Xử lý tin nhắn ảnh (GPT-4o) ]=====================
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.message
     caption = message.caption or ""
-    # Chỉ xử lý ảnh nếu caption chứa từ khóa kích hoạt
     if not should_respond_to(caption):
         return
     try:
@@ -114,6 +111,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         file = await context.bot.get_file(photo.file_id)
         response = requests.get(file.file_path)
         encoded_image = base64.b64encode(response.content).decode("utf-8")
+
         gpt_response = openai.ChatCompletion.create(
             model="gpt-4o",
             messages=[
@@ -140,14 +138,13 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = message.text.strip()
     user = update.effective_user.username or update.effective_user.first_name
     lower = text.lower()
-    
-    # Chỉ xử lý tin nhắn có chứa từ khóa kích hoạt
+
+    # Chỉ xử lý nếu có từ khóa kích hoạt
     if not should_respond_to(lower):
         return
-    
-    # Lưu lại hội thoại
+
     append_conversation(chat_id, "user", text, user)
-    
+
     try:
         gpt_response = openai.ChatCompletion.create(
             model="gpt-4o",
@@ -160,17 +157,20 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logging.error(f"GPT Text Error: {e}")
         reply = "❌ Đã xảy ra lỗi khi gọi GPT."
-    
+
     await message.reply_text(f"@{user} {reply}", parse_mode=ParseMode.MARKDOWN)
 
 # =====================[ MAIN BOT ]=====================
 async def main():
     app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", lambda u, c: u.message.reply_text("Bot đã sẵn sàng.")))
-    # Thêm handler cho lệnh cập nhật thiết bị /capnhat
-    app.add_handler(CommandHandler("capnhat", update_devices_command, filters=filters.COMMAND))
+    # Lệnh /getdata để lấy dữ liệu từ Google Sheet
+    app.add_handler(CommandHandler("getdata", getdata_command))
+    # Xử lý tin nhắn ảnh
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
+    # Xử lý tin nhắn văn bản
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_text))
+
     await app.run_polling()
 
 if __name__ == '__main__':
